@@ -52,18 +52,36 @@ module RedmineHelpdesk
             carbon_copy = nil
           end
           
-#          issue.description = email_details + issue.description
-	  sender_name = if @email.from_addrs.present? && @email.from_addrs.first.display_name.present?
-	                  @email.from_addrs.first.display_name
-	                else
-	                  # Преобразуем email → имя
-	                  sender_email.split('@').first.split(/[._-]/).map(&:capitalize).join(' ')
-	                end
 
-	  # Добавляем строку с автором
-	  author_line = "**От:** #{sender_name} <#{sender_email}>\n\n"
-	  issue.description = author_line + email_details + issue.description
-          issue.save( validate: false ) # skip validation!
+
+
+	from_addr = Array(@email.from_addrs).first
+
+	# 1. E-mail отправителя
+	sender_email =
+	  if from_addr.is_a?(Mail::Address)
+    	    from_addr.address
+  	  else
+    	    # from_addrs вернул строки — берём первый из @email.from
+    	    Array(@email.from).first.to_s
+  	end
+
+	# 2. Имя отправителя
+	sender_name =
+  	  if from_addr.respond_to?(:display_name) && from_addr.display_name.present?
+    	    from_addr.display_name
+  	  else
+    	    # Имени нет — делаем его из e-mail'а
+    	    sender_email.split('@').first.split(/[._-]/).map(&:capitalize).join(' ')
+  	end
+
+	# 3. Строка "От:"
+	author_line = "**От:** #{sender_name} <#{sender_email}>\n\n"
+
+	issue.description = (author_line + email_details.to_s + issue.description.to_s)
+
+
+	  issue.save( validate: false ) # skip validation!
           
           custom_value = custom_field_value(issue,'owner-email')
           if custom_value.value.to_s.strip.empty?
@@ -79,12 +97,14 @@ module RedmineHelpdesk
           # on the first issue.save. So we need to send
           # the notification email to the supportclient
           # on our own.
-          HelpdeskMailer.email_to_supportclient(
-            issue, {
-              recipient:   sender_email,
-              carbon_copy: carbon_copy
-            }
-          ).deliver
+        mail = HelpdeskMailer.email_to_supportclient(
+          issue, {
+  	    recipient:   sender_email,
+    	    carbon_copy: carbon_copy
+	  }
+	)
+	mail.deliver if mail	
+
         end
         after_dispatch_to_default_hook issue
         return issue
@@ -148,7 +168,8 @@ module RedmineHelpdesk
         details << "To:   " + @email[:to].formatted.join(', ') + "\n" if !@email.to.nil?
         details << "Cc:   " + @email[:cc].formatted.join(', ') + "\n" if !@email.cc.nil?
         details << "Date: " + @email[:date].to_s + "\n"
-        "<pre>\n" + Mail::Encodings.unquote_and_convert_to(details, 'utf-8') + "</pre>\n\n"
+        details << "Subject: " + @email.subject.to_s + "\n" if @email.subject.present?
+	"<pre>\n" + Mail::Encodings.unquote_and_convert_to(details, 'utf-8') + "</pre>\n\n"
       end
 
 private
